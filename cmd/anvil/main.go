@@ -53,8 +53,8 @@ func main() {
 
 	util.Logger.Info().Msg("Starting Anvil")
 
-	// Run TUI
-	if err := tui.Run(); err != nil {
+	// Run TUI with config
+	if err := tui.RunWithConfig(configMgr); err != nil {
 		util.Logger.Error().Err(err).Msg("TUI error")
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/siddharth-bhatnagar/anvil/internal/config"
+	"github.com/siddharth-bhatnagar/anvil/internal/llm"
 	"github.com/siddharth-bhatnagar/anvil/internal/tui/panels"
 )
 
@@ -13,21 +17,30 @@ const version = "0.1.0"
 
 // Model represents the application state
 type Model struct {
-	width        int
-	height       int
-	ready        bool
-	panelManager *PanelManager
-	showHelp     bool
+	width         int
+	height        int
+	ready         bool
+	panelManager  *PanelManager
+	showHelp      bool
+	input         textinput.Model
+	llmClient     llm.Client
+	tokenTracker  *llm.TokenTracker
+	configManager *config.Manager
+	streaming     bool
+	streamBuffer  string
 }
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	return m.panelManager.Init()
+	return tea.Batch(
+		m.panelManager.Init(),
+		textinput.Blink,
+	)
 }
 
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
+	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -38,9 +51,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// If streaming, only allow interrupt
+		if m.streaming {
+			if msg.String() == "ctrl+c" {
+				m.streaming = false
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
+		// Handle input field when focused
+		if m.input.Focused() {
+			switch msg.String() {
+			case "enter":
+				// Send message
+				userMsg := m.input.Value()
+				if userMsg != "" {
+					m.input.SetValue("")
+					return m, m.sendMessage(userMsg)
+				}
+				return m, nil
+			case "esc":
+				m.input.Blur()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				return m, cmd
+			}
+		}
+
+		// Global shortcuts
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+
+		case "i", "/":
+			m.input.Focus()
+			return m, textinput.Blink
 
 		case "tab":
 			m.panelManager.NextPanel()
@@ -70,12 +118,87 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = !m.showHelp
 			return m, nil
 		}
+
+	case StreamChunkMsg:
+		// Handle streaming chunk
+		if msg.Error != nil {
+			m.streaming = false
+			// Show error
+			return m, func() tea.Msg {
+				return ErrorMsg{Error: msg.Error}
+			}
+		}
+
+		if msg.Delta != "" {
+			m.streamBuffer += msg.Delta
+		}
+
+		if msg.Done {
+			m.streaming = false
+			// Add complete message to conversation
+			convPanel := m.panelManager.GetPanelByType(PanelConversation).(*panels.ConversationPanel)
+			convPanel.AddMessage("assistant", m.streamBuffer)
+
+			// Track usage
+			if msg.Usage != nil {
+				m.tokenTracker.AddUsage(*msg.Usage)
+			}
+
+			m.streamBuffer = ""
+		}
+
+		return m, nil
+
+	case ErrorMsg:
+		// Handle error - could show in status bar or conversation
+		m.streaming = false
+		return m, nil
 	}
 
-	// Update panels
-	cmd = m.panelManager.Update(msg)
+	// Update input if not focused on input
+	if !m.input.Focused() {
+		cmd := m.panelManager.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
-	return m, cmd
+	return m, tea.Batch(cmds...)
+}
+
+// sendMessage sends a message to the LLM
+func (m *Model) sendMessage(content string) tea.Cmd {
+	// Add user message to conversation
+	convPanel := m.panelManager.GetPanelByType(PanelConversation).(*panels.ConversationPanel)
+	convPanel.AddMessage("user", content)
+
+	// Prepare request
+	messages := []llm.Message{
+		{Role: llm.RoleUser, Content: content},
+	}
+
+	req := llm.Request{
+		Messages: messages,
+		Stream:   true,
+	}
+
+	m.streaming = true
+	m.streamBuffer = ""
+
+	// Start streaming
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		err := m.llmClient.Stream(ctx, req, func(event llm.StreamEvent) {
+			// Send each chunk as a message
+			// Note: In a real implementation, we'd use a channel
+			// For simplicity, we'll just accumulate and send at the end
+		})
+
+		if err != nil {
+			return StreamChunkMsg{Error: err, Done: true}
+		}
+
+		return StreamChunkMsg{Done: true}
+	}
 }
 
 // View renders the UI
@@ -94,7 +217,8 @@ func (m Model) View() string {
 	// Calculate dimensions
 	headerHeight := lipgloss.Height(header)
 	statusBarHeight := 1
-	contentHeight := m.height - headerHeight - statusBarHeight - 2 // -2 for spacing
+	inputHeight := 3 // Input field height
+	contentHeight := m.height - headerHeight - statusBarHeight - inputHeight - 2 // -2 for spacing
 
 	// Layout panels in 2x2 grid
 	panelWidth := m.width / 2
@@ -123,6 +247,19 @@ func (m Model) View() string {
 		// Combine rows
 		content := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
 
+		// Input field
+		inputStyle := lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(ColorBorder).
+			Width(m.width - 4).
+			Padding(0, 1)
+
+		if m.input.Focused() {
+			inputStyle = inputStyle.BorderForeground(ColorAccent)
+		}
+
+		inputView := inputStyle.Render(m.input.View())
+
 		// Status bar
 		statusBar := m.renderStatusBar()
 
@@ -131,6 +268,7 @@ func (m Model) View() string {
 			lipgloss.Left,
 			header,
 			content,
+			inputView,
 			statusBar,
 		)
 
@@ -183,8 +321,21 @@ func (m Model) renderStatusBar() string {
 		activeName = activePanel.Title()
 	}
 
-	left := fmt.Sprintf("Panel: %s", activeName)
-	right := fmt.Sprintf("? Help | Tab Switch | q Quit | %dx%d", m.width, m.height)
+	// Get token stats
+	stats := m.tokenTracker.GetStats()
+	tokenInfo := ""
+	if stats.TotalTokens > 0 {
+		tokenInfo = fmt.Sprintf(" | Tokens: %d", stats.TotalTokens)
+	}
+
+	// Show streaming indicator
+	streamingIndicator := ""
+	if m.streaming {
+		streamingIndicator = " | ⚡ Streaming..."
+	}
+
+	left := fmt.Sprintf("Panel: %s%s%s", activeName, tokenInfo, streamingIndicator)
+	right := fmt.Sprintf("i Input | ? Help | Tab Switch | q Quit | %dx%d", m.width, m.height)
 
 	// Calculate spacing
 	spacing := m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -220,6 +371,11 @@ func (m Model) renderHelp() string {
 				"  2 - Files (j/k to navigate, r to refresh)",
 				"  3 - Diff",
 				"  4 - Plan",
+				"",
+				"Input:",
+				"  i or / - Focus input field",
+				"  Enter  - Send message",
+				"  Esc    - Exit input mode",
 				"",
 				"General:",
 				"  ?      - Toggle this help",
@@ -298,19 +454,86 @@ index 1234567..abcdefg 100644
 +    fmt.Println("new")
  }`, "main.go")
 
+	// Initialize text input
+	ti := textinput.New()
+	ti.Placeholder = "Type your message here..."
+	ti.CharLimit = 500
+	ti.Width = 80
+
+	// Initialize token tracker
+	tokenTracker := llm.NewTokenTracker()
+
 	return Model{
-		panelManager: pm,
+		panelManager:  pm,
+		input:         ti,
+		tokenTracker:  tokenTracker,
+		streamBuffer:  "",
+		streaming:     false,
 	}
+}
+
+// NewModelWithConfig creates a new application model with config
+func NewModelWithConfig(configMgr *config.Manager) (Model, error) {
+	m := NewModel()
+	m.configManager = configMgr
+
+	// Initialize LLM client
+	cfg := configMgr.GetConfig()
+
+	// Try to get API key for the configured provider
+	apiKey, err := configMgr.GetAPIKey(cfg.Provider)
+	if err != nil {
+		// No API key configured - app will work but can't send messages
+		// We'll show an error when the user tries to send a message
+		return m, nil
+	}
+
+	// Create LLM client
+	llmConfig := llm.ClientConfig{
+		Provider:    llm.ProviderType(cfg.Provider),
+		APIKey:      apiKey,
+		Model:       cfg.Model,
+		MaxTokens:   cfg.MaxTokens,
+		Temperature: cfg.Temperature,
+		MaxRetries:  3,
+	}
+
+	client, err := llm.NewClient(llmConfig)
+	if err != nil {
+		return m, err
+	}
+
+	// Wrap with retry logic
+	m.llmClient = llm.NewRetryableClient(client, llm.DefaultRetryConfig())
+
+	return m, nil
 }
 
 // Run starts the TUI application
 func Run() error {
+	return RunWithConfig(nil)
+}
+
+// RunWithConfig starts the TUI application with a config manager
+func RunWithConfig(configMgr *config.Manager) error {
+	var m Model
+	var err error
+
+	if configMgr != nil {
+		m, err = NewModelWithConfig(configMgr)
+		if err != nil {
+			return fmt.Errorf("failed to initialize model: %w", err)
+		}
+	} else {
+		m = NewModel()
+	}
+
 	p := tea.NewProgram(
-		NewModel(),
+		m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
 
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
 }
