@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -9,7 +10,23 @@ import (
 	"github.com/siddharth-bhatnagar/anvil/internal/util"
 )
 
+var (
+	version   = "0.1.0-dev"
+	commit    = "unknown"
+	date      = "unknown"
+	showVersion = flag.Bool("version", false, "Show version information")
+)
+
 func main() {
+	flag.Parse()
+
+	// Handle version flag
+	if *showVersion {
+		fmt.Printf("Anvil v%s\n", version)
+		fmt.Printf("Commit: %s\n", commit)
+		fmt.Printf("Built: %s\n", date)
+		return
+	}
 	// Initialize configuration
 	configMgr := config.NewManager()
 	if err := configMgr.Load(); err != nil {
