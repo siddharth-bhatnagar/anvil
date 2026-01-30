@@ -17,6 +17,13 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// Tool represents a tool that can be called by the LLM
+type Tool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
 // Request represents a request to an LLM
 type Request struct {
 	Model       string    `json:"model"`
@@ -25,6 +32,7 @@ type Request struct {
 	Temperature float64   `json:"temperature,omitempty"`
 	TopP        float64   `json:"top_p,omitempty"`
 	Stream      bool      `json:"stream"`
+	Tools       []Tool    `json:"tools,omitempty"` // Tools available to the LLM
 	SystemPrompt string   `json:"-"` // Handled differently by providers
 }
 

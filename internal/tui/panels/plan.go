@@ -213,6 +213,11 @@ func (p *PlanPanel) GetSteps() []Step {
 	return p.steps
 }
 
+// StepCount returns the number of steps
+func (p *PlanPanel) StepCount() int {
+	return len(p.steps)
+}
+
 // GetProgress returns the current progress (completed / total)
 func (p *PlanPanel) GetProgress() (completed, total int) {
 	total = len(p.steps)

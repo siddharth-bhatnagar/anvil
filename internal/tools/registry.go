@@ -157,5 +157,14 @@ func DefaultRegistry() (*Registry, error) {
 		return nil, err
 	}
 
+	// Register analysis tools
+	if err := registry.Register(NewAnalyzeFileTool()); err != nil {
+		return nil, err
+	}
+
+	if err := registry.Register(NewFindSymbolTool()); err != nil {
+		return nil, err
+	}
+
 	return registry, nil
 }
