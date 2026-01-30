@@ -3,6 +3,7 @@ package util
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -349,5 +350,139 @@ func TestLogFilePermissions(t *testing.T) {
 	mode := info.Mode().Perm()
 	if mode&0077 != 0 {
 		t.Errorf("log file has insecure permissions: %o", mode)
+	}
+}
+
+// Diff tests
+func TestUnifiedDiff(t *testing.T) {
+	old := "line1\nline2\nline3"
+	new := "line1\nmodified\nline3\nline4"
+
+	diff := UnifiedDiff(old, new, "old.txt", "new.txt")
+
+	if diff == "" {
+		t.Error("Diff should not be empty")
+	}
+	if !strings.Contains(diff, "--- old.txt") {
+		t.Error("Diff should contain old file header")
+	}
+	if !strings.Contains(diff, "+++ new.txt") {
+		t.Error("Diff should contain new file header")
+	}
+}
+
+func TestUnifiedDiffIdentical(t *testing.T) {
+	text := "line1\nline2\nline3"
+
+	diff := UnifiedDiff(text, text, "a.txt", "b.txt")
+
+	// Should have headers but no changes
+	if !strings.Contains(diff, "---") {
+		t.Error("Should have headers")
+	}
+}
+
+func TestUnifiedDiffEmpty(t *testing.T) {
+	diff := UnifiedDiff("", "new content", "a.txt", "b.txt")
+	if diff == "" {
+		t.Error("Diff of empty to content should not be empty")
+	}
+
+	diff = UnifiedDiff("old content", "", "a.txt", "b.txt")
+	if diff == "" {
+		t.Error("Diff of content to empty should not be empty")
+	}
+}
+
+func TestSimpleDiff(t *testing.T) {
+	old := "line1\nline2\nline3"
+	new := "line1\nmodified\nline3"
+
+	diff := SimpleDiff(old, new)
+
+	if !strings.Contains(diff, "line1") {
+		t.Error("Should contain unchanged line")
+	}
+	if !strings.Contains(diff, "- line2") {
+		t.Error("Should show removed line")
+	}
+	if !strings.Contains(diff, "+ modified") {
+		t.Error("Should show added line")
+	}
+}
+
+func TestCountChanges(t *testing.T) {
+	diff := `--- a/file.txt
++++ b/file.txt
+@@ -1,3 +1,4 @@
+ unchanged
++added1
++added2
+-removed
+ unchanged`
+
+	added, removed := CountChanges(diff)
+
+	if added != 2 {
+		t.Errorf("Expected 2 added lines, got %d", added)
+	}
+	if removed != 1 {
+		t.Errorf("Expected 1 removed line, got %d", removed)
+	}
+}
+
+func TestCountChangesEmpty(t *testing.T) {
+	added, removed := CountChanges("")
+	if added != 0 || removed != 0 {
+		t.Error("Empty diff should have no changes")
+	}
+}
+
+func TestHasChanges(t *testing.T) {
+	withChanges := "+added\n-removed"
+	noChanges := " context only"
+
+	if !HasChanges(withChanges) {
+		t.Error("Should detect changes")
+	}
+	if HasChanges(noChanges) {
+		t.Error("Should not detect changes in context-only")
+	}
+}
+
+func TestDiffStats(t *testing.T) {
+	stats := DiffStats{
+		FilesChanged: 3,
+		Additions:    10,
+		Deletions:    5,
+	}
+
+	str := stats.String()
+	if !strings.Contains(str, "3 file(s)") {
+		t.Error("Should contain file count")
+	}
+	if !strings.Contains(str, "10 insertion") {
+		t.Error("Should contain additions")
+	}
+	if !strings.Contains(str, "5 deletion") {
+		t.Error("Should contain deletions")
+	}
+}
+
+func TestMax(t *testing.T) {
+	tests := []struct {
+		a, b, want int
+	}{
+		{1, 2, 2},
+		{5, 3, 5},
+		{0, 0, 0},
+		{-1, -2, -1},
+	}
+
+	for _, tt := range tests {
+		got := max(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("max(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
 	}
 }
