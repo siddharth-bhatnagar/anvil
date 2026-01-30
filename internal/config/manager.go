@@ -61,8 +61,12 @@ func (m *Manager) Load() error {
 
 	// Read config file if it exists
 	if err := viper.ReadInConfig(); err != nil {
+		// Check for various "file not found" error types
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return fmt.Errorf("failed to read config file: %w", err)
+			// Also check for os.PathError (file doesn't exist)
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to read config file: %w", err)
+			}
 		}
 		// Config file doesn't exist yet, will be created on Save()
 	}

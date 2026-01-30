@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -110,10 +111,18 @@ func (s TokenStats) FormatStats() string {
 // FormatTokenCount formats a token count with K/M suffixes
 func FormatTokenCount(tokens int) string {
 	if tokens < 1000 {
-		return string(rune(tokens))
+		return fmt.Sprintf("%d", tokens)
 	} else if tokens < 1_000_000 {
-		return string(rune(tokens/1000)) + "K"
+		k := float64(tokens) / 1000
+		if k == float64(int(k)) {
+			return fmt.Sprintf("%dK", int(k))
+		}
+		return fmt.Sprintf("%.1fK", k)
 	} else {
-		return string(rune(tokens/1_000_000)) + "M"
+		m := float64(tokens) / 1_000_000
+		if m == float64(int(m)) {
+			return fmt.Sprintf("%dM", int(m))
+		}
+		return fmt.Sprintf("%.1fM", m)
 	}
 }
